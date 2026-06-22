@@ -388,6 +388,7 @@ namespace tao::json
       [[nodiscard]] T& pointer_at( T* v, const std::vector< token >::const_iterator& begin, const std::vector< token >::const_iterator& end )
       {
          for( auto it = begin; it != end; ++it ) {
+            const bool is_last = ( std::next( it ) == end );
             switch( v->type() ) {
                case type::ARRAY:
                   if( it->key().empty() ) {
@@ -396,10 +397,10 @@ namespace tao::json
                   v = &v->at( it->index() );
                   break;
                case type::OBJECT:
-                  v = &v->at( it->key() );
-                  if( it->key().empty() ) {
-                     return *v;
+                  if( is_last && it->key().empty() ) {
+                     return v->at( it->key() );
                   }
+                  v = &v->at( it->key() );
                   break;
                default:
                   throw invalid_type( begin, std::next( it ) );
@@ -412,6 +413,7 @@ namespace tao::json
       [[nodiscard]] T* pointer_find( T* v, const std::vector< token >::const_iterator& begin, const std::vector< token >::const_iterator& end )
       {
          for( auto it = begin; v && ( it != end ); ++it ) {
+            const bool is_last = ( std::next( it ) == end );
             switch( v->type() ) {
                case type::ARRAY:
                   if( it->key().empty() ) {
@@ -420,10 +422,10 @@ namespace tao::json
                   v = v->find( it->index() );
                   break;
                case type::OBJECT:
-                  v = v->find( it->key() );
-                  if( v && it->key().empty() ) {
-                     return v;
+                  if( is_last && it->key().empty() ) {
+                     return v->find( it->key() );
                   }
+                  v = v->find( it->key() );
                   break;
                default:
                   throw invalid_type( begin, std::next( it ) );
@@ -435,64 +437,40 @@ namespace tao::json
       template< typename T >
       [[nodiscard]] T& pointer_access( T* v, const std::vector< token >::const_iterator& begin, const std::vector< token >::const_iterator& end )
       {
-         auto it = begin;
-         while( it != end ) {
-            switch( v->type() ) {
-               case type::ARRAY: {
-                  if( it->key().empty() ) {
-                     throw invalid_type( begin, std::next( it ) );
-                  }
-                  const bool is_last = ( std::next( it ) == end );
-                  if( it->key() == "-" ) {
-                     if( !is_last ) {
-                        throw invalid_type( begin, std::next( it ) );
-                     }
-                     if constexpr( std::is_const_v< T > ) {
-                        throw pointer_index_out_of_range( begin, end, v->get_array().size(), v->get_array().size(), *v );
-                     }
-                     else {
-                        v->emplace_back( null );
-                        return v->get_array().back();
-                     }
-                  }
-                  const std::size_t i = it->index();
-                  if( is_last ) {
-                     if( i == v->get_array().size() ) {
-                        if constexpr( std::is_const_v< T > ) {
-                           throw pointer_index_out_of_range( begin, end, i, v->get_array().size(), *v );
-                        }
-                        else {
-                           v->emplace_back( null );
-                           return v->get_array().back();
-                        }
-                     }
-                     throw pointer_index_out_of_range( begin, end, i, v->get_array().size(), *v );
-                  }
-                  v = &v->at( i );
-                  break;
-               }
-               case type::OBJECT: {
-                  const bool is_last = ( std::next( it ) == end );
-                  if( is_last ) {
-                     if constexpr( std::is_const_v< T > ) {
-                        return v->at( it->key() );
-                     }
-                     else {
-                        return v->get_object()[ it->key() ];
-                     }
-                  }
-                  v = &v->at( it->key() );
-                  if( it->key().empty() ) {
-                     return *v;
-                  }
-                  break;
-               }
-               default:
-                  throw invalid_type( begin, std::next( it ) );
-            }
-            ++it;
+         if( begin == end ) {
+            return *v;
          }
-         return *v;
+         const auto e = std::prev( end );
+         T& parent = pointer_at( v, begin, e );
+         if( parent.is_object() ) {
+            if constexpr( std::is_const_v< T > ) {
+               return parent.at( e->key() );
+            }
+            else {
+               return parent.get_object()[ e->key() ];
+            }
+         }
+         if( parent.is_array() ) {
+            auto& a = parent.get_array();
+            if( e->key().empty() ) {
+               throw invalid_type( begin, end );
+            }
+            if( e->key() == "-" ) {
+               if constexpr( std::is_const_v< T > ) {
+                  throw pointer_index_out_of_range( begin, end, a.size(), a.size(), *v );
+               }
+               else {
+                  parent.emplace_back( null );
+                  return a.back();
+               }
+            }
+            const std::size_t i = e->index();
+            if( i < a.size() ) {
+               return a.at( i );
+            }
+            throw pointer_index_out_of_range( begin, end, i, a.size(), *v );
+         }
+         throw invalid_type( begin, end );
       }
 
       template< typename T >
@@ -501,33 +479,19 @@ namespace tao::json
          if( begin == end ) {
             throw invalid_root_pointer_for_erase( *v );
          }
-         auto it = begin;
-         while( it != end ) {
-            const bool is_last = ( std::next( it ) == end );
-            switch( v->type() ) {
-               case type::ARRAY: {
-                  if( it->key().empty() ) {
-                     throw invalid_type( begin, std::next( it ) );
-                  }
-                  if( is_last ) {
-                     v->erase( it->index() );
-                     return;
-                  }
-                  v = &v->at( it->index() );
-                  break;
-               }
-               case type::OBJECT: {
-                  if( is_last || it->key().empty() ) {
-                     v->erase( it->key() );
-                     return;
-                  }
-                  v = &v->at( it->key() );
-                  break;
-               }
-               default:
-                  throw invalid_type( begin, std::next( it ) );
+         const auto e = std::prev( end );
+         T& parent = pointer_at( v, begin, e );
+         if( parent.is_object() ) {
+            parent.erase( e->key() );
+         }
+         else if( parent.is_array() ) {
+            if( e->key().empty() ) {
+               throw invalid_type( begin, end );
             }
-            ++it;
+            parent.erase( e->index() );
+         }
+         else {
+            throw invalid_type( begin, end );
          }
       }
 
@@ -538,50 +502,32 @@ namespace tao::json
             *v = std::move( in );
             return *v;
          }
-         auto it = begin;
-         while( it != end ) {
-            const bool is_last = ( std::next( it ) == end );
-            switch( v->type() ) {
-               case type::ARRAY: {
-                  auto& a = v->get_array();
-                  if( it->key().empty() ) {
-                     throw invalid_type( begin, std::next( it ) );
-                  }
-                  if( it->key() == "-" ) {
-                     if( !is_last ) {
-                        throw invalid_type( begin, std::next( it ) );
-                     }
-                     v->emplace_back( std::move( in ) );
-                     return a.back();
-                  }
-                  const auto i = it->index();
-                  if( is_last ) {
-                     if( i > a.size() ) {
-                        throw pointer_index_out_of_range( begin, end, i, a.size(), *v );
-                     }
-                     if( i == a.size() ) {
-                        v->emplace_back( std::move( in ) );
-                        return a.back();
-                     }
-                     a[ i ] = std::move( in );
-                     return a[ i ];
-                  }
-                  v = &v->at( i );
-                  break;
-               }
-               case type::OBJECT: {
-                  if( is_last || it->key().empty() ) {
-                     return v->get_object().insert_or_assign( it->key(), std::move( in ) ).first->second;
-                  }
-                  v = &v->at( it->key() );
-                  break;
-               }
-               default:
-                  throw invalid_type( begin, std::next( it ) );
-            }
-            ++it;
+         const auto e = std::prev( end );
+         T& parent = pointer_at( v, begin, e );
+         if( parent.is_object() ) {
+            return parent.get_object().insert_or_assign( e->key(), std::move( in ) ).first->second;
          }
-         return *v;
+         if( parent.is_array() ) {
+            auto& a = parent.get_array();
+            if( e->key().empty() ) {
+               throw invalid_type( begin, end );
+            }
+            if( e->key() == "-" ) {
+               parent.emplace_back( std::move( in ) );
+               return a.back();
+            }
+            const std::size_t i = e->index();
+            if( i > a.size() ) {
+               throw pointer_index_out_of_range( begin, end, i, a.size(), *v );
+            }
+            if( i == a.size() ) {
+               parent.emplace_back( std::move( in ) );
+               return a.back();
+            }
+            a.insert( a.begin() + i, std::move( in ) );
+            return a.at( i );
+         }
+         throw invalid_type( begin, end );
       }
 
    }  // namespace internal
