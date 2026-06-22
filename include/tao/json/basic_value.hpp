@@ -757,6 +757,11 @@ namespace tao::json
          return internal::pointer_access( this, k.begin(), k.end() );
       }
 
+      [[nodiscard]] const basic_value& operator[]( const pointer& k ) const
+      {
+         return internal::pointer_access( this, k.begin(), k.end() );
+      }
+
       template< typename T >
       [[nodiscard]] std::enable_if_t< internal::has_as< Traits< T >, basic_value >, T > as() const
       {

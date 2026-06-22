@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -389,6 +390,9 @@ namespace tao::json
          for( auto it = begin; it != end; ++it ) {
             switch( v->type() ) {
                case type::ARRAY:
+                  if( it->key().empty() ) {
+                     throw invalid_type( begin, std::next( it ) );
+                  }
                   v = &v->at( it->index() );
                   break;
                case type::OBJECT:
@@ -407,6 +411,9 @@ namespace tao::json
          for( auto it = begin; v && ( it != end ); ++it ) {
             switch( v->type() ) {
                case type::ARRAY:
+                  if( it->key().empty() ) {
+                     throw invalid_type( begin, std::next( it ) );
+                  }
                   v = v->find( it->index() );
                   break;
                case type::OBJECT:
@@ -428,12 +435,25 @@ namespace tao::json
          const auto e = std::prev( end );
          T& parent = pointer_at( v, begin, e );
          if( parent.is_object() ) {
-            return parent.get_object()[ e->key() ];
+            if constexpr( std::is_const_v< T > ) {
+               return parent.at( e->key() );
+            }
+            else {
+               return parent.get_object()[ e->key() ];
+            }
          }
          if( parent.is_array() ) {
+            if( e->key().empty() ) {
+               throw invalid_type( begin, std::next( e ) );
+            }
             if( e->key() == "-" ) {
-               parent.emplace_back( null );
-               return parent.get_array().back();
+               if constexpr( std::is_const_v< T > ) {
+                  throw pointer_index_out_of_range( begin, std::next( e ), parent.get_array().size(), parent.get_array().size(), *v );
+               }
+               else {
+                  parent.emplace_back( null );
+                  return parent.get_array().back();
+               }
             }
             return parent.at( e->index() );
          }
@@ -452,6 +472,9 @@ namespace tao::json
             parent.erase( e->key() );
          }
          else if( parent.is_array() ) {
+            if( e->key().empty() ) {
+               throw invalid_type( begin, std::next( e ) );
+            }
             parent.erase( e->index() );
          }
          else {
@@ -473,16 +496,23 @@ namespace tao::json
          }
          if( parent.is_array() ) {
             auto& a = parent.get_array();
+            if( e->key().empty() ) {
+               throw invalid_type( begin, std::next( e ) );
+            }
             if( e->key() == "-" ) {
                parent.emplace_back( std::move( in ) );
                return a.back();
             }
             const auto i = e->index();
-            if( i >= a.size() ) {
+            if( i > a.size() ) {
                throw pointer_index_out_of_range( begin, std::next( e ), i, a.size(), *v );
             }
-            a.insert( a.begin() + i, std::move( in ) );
-            return a.at( i );
+            if( i == a.size() ) {
+               parent.emplace_back( std::move( in ) );
+               return a.back();
+            }
+            a[ i ] = std::move( in );
+            return a[ i ];
          }
          throw invalid_type( begin, std::next( e ) );
       }
