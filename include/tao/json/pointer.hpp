@@ -18,6 +18,7 @@
 #include <tao/pegtl/rules.hpp>
 #include <tao/pegtl/utf8.hpp>
 
+#include "message_extension.hpp"
 #include "type.hpp"
 
 #include "internal/format.hpp"
@@ -371,6 +372,18 @@ namespace tao::json
       }
 
       template< typename T >
+      [[nodiscard]] inline std::runtime_error invalid_root_pointer_for_erase( T& v )
+      {
+         return std::runtime_error( internal::format( "invalid root JSON Pointer for erase", json::message_extension( v ) ) );
+      }
+
+      template< typename T >
+      [[nodiscard]] inline std::out_of_range pointer_index_out_of_range( const std::vector< token >::const_iterator& begin, const std::vector< token >::const_iterator& end, const std::size_t i, const std::size_t size, T& v )
+      {
+         return std::out_of_range( internal::format( "invalid JSON Pointer \"", tokens_to_string( begin, end ), "\", array index '", i, "' out of bound '", size, '\'', json::message_extension( v ) ) );
+      }
+
+      template< typename T >
       [[nodiscard]] T& pointer_at( T* v, const std::vector< token >::const_iterator& begin, const std::vector< token >::const_iterator& end )
       {
          for( auto it = begin; it != end; ++it ) {
@@ -404,6 +417,74 @@ namespace tao::json
             }
          }
          return v;
+      }
+
+      template< typename T >
+      [[nodiscard]] T& pointer_access( T* v, const std::vector< token >::const_iterator& begin, const std::vector< token >::const_iterator& end )
+      {
+         if( begin == end ) {
+            return *v;
+         }
+         const auto e = std::prev( end );
+         T& parent = pointer_at( v, begin, e );
+         if( parent.is_object() ) {
+            return parent.get_object()[ e->key() ];
+         }
+         if( parent.is_array() ) {
+            if( e->key() == "-" ) {
+               parent.emplace_back( null );
+               return parent.get_array().back();
+            }
+            return parent.at( e->index() );
+         }
+         throw invalid_type( begin, std::next( e ) );
+      }
+
+      template< typename T >
+      void pointer_erase( T* v, const std::vector< token >::const_iterator& begin, const std::vector< token >::const_iterator& end )
+      {
+         if( begin == end ) {
+            throw invalid_root_pointer_for_erase( *v );
+         }
+         const auto e = std::prev( end );
+         T& parent = pointer_at( v, begin, e );
+         if( parent.is_object() ) {
+            parent.erase( e->key() );
+         }
+         else if( parent.is_array() ) {
+            parent.erase( e->index() );
+         }
+         else {
+            throw invalid_type( begin, std::next( e ) );
+         }
+      }
+
+      template< typename T >
+      [[nodiscard]] T& pointer_insert( T* v, const std::vector< token >::const_iterator& begin, const std::vector< token >::const_iterator& end, T in )
+      {
+         if( begin == end ) {
+            *v = std::move( in );
+            return *v;
+         }
+         const auto e = std::prev( end );
+         T& parent = pointer_at( v, begin, e );
+         if( parent.is_object() ) {
+            return parent.get_object().insert_or_assign( e->key(), std::move( in ) ).first->second;
+         }
+         if( parent.is_array() ) {
+            auto& a = parent.get_array();
+            if( e->key() == "-" ) {
+               parent.emplace_back( std::move( in ) );
+               return a.back();
+            }
+            const auto i = e->index();
+            if( i >= a.size() ) {
+               throw pointer_index_out_of_range( begin, std::next( e ), i, a.size(), *v );
+            }
+            a.insert( a.begin() + i, std::move( in ) );
+            return a.at( i );
+         }
+         throw invalid_type( begin, std::next( e ) );
       }
 
    }  // namespace internal
