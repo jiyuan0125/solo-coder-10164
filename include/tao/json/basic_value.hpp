@@ -738,7 +738,11 @@ namespace tao::json
 
       [[nodiscard]] basic_value& operator[]( const std::size_t index )
       {
-         return get_array()[ index ];
+         auto& a = prepare_array();
+         if( index >= a.size() ) {
+            a.resize( index + 1 );
+         }
+         return a[ index ];
       }
 
       [[nodiscard]] const basic_value& operator[]( const std::size_t index ) const

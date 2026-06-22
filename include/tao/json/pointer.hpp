@@ -397,6 +397,9 @@ namespace tao::json
                   break;
                case type::OBJECT:
                   v = &v->at( it->key() );
+                  if( it->key().empty() ) {
+                     return *v;
+                  }
                   break;
                default:
                   throw invalid_type( begin, std::next( it ) );
@@ -418,6 +421,9 @@ namespace tao::json
                   break;
                case type::OBJECT:
                   v = v->find( it->key() );
+                  if( v && it->key().empty() ) {
+                     return v;
+                  }
                   break;
                default:
                   throw invalid_type( begin, std::next( it ) );
@@ -429,35 +435,64 @@ namespace tao::json
       template< typename T >
       [[nodiscard]] T& pointer_access( T* v, const std::vector< token >::const_iterator& begin, const std::vector< token >::const_iterator& end )
       {
-         if( begin == end ) {
-            return *v;
-         }
-         const auto e = std::prev( end );
-         T& parent = pointer_at( v, begin, e );
-         if( parent.is_object() ) {
-            if constexpr( std::is_const_v< T > ) {
-               return parent.at( e->key() );
-            }
-            else {
-               return parent.get_object()[ e->key() ];
-            }
-         }
-         if( parent.is_array() ) {
-            if( e->key().empty() ) {
-               throw invalid_type( begin, std::next( e ) );
-            }
-            if( e->key() == "-" ) {
-               if constexpr( std::is_const_v< T > ) {
-                  throw pointer_index_out_of_range( begin, std::next( e ), parent.get_array().size(), parent.get_array().size(), *v );
+         auto it = begin;
+         while( it != end ) {
+            switch( v->type() ) {
+               case type::ARRAY: {
+                  if( it->key().empty() ) {
+                     throw invalid_type( begin, std::next( it ) );
+                  }
+                  const bool is_last = ( std::next( it ) == end );
+                  if( it->key() == "-" ) {
+                     if( !is_last ) {
+                        throw invalid_type( begin, std::next( it ) );
+                     }
+                     if constexpr( std::is_const_v< T > ) {
+                        throw pointer_index_out_of_range( begin, end, v->get_array().size(), v->get_array().size(), *v );
+                     }
+                     else {
+                        v->emplace_back( null );
+                        return v->get_array().back();
+                     }
+                  }
+                  const std::size_t i = it->index();
+                  if( is_last ) {
+                     if( i == v->get_array().size() ) {
+                        if constexpr( std::is_const_v< T > ) {
+                           throw pointer_index_out_of_range( begin, end, i, v->get_array().size(), *v );
+                        }
+                        else {
+                           v->emplace_back( null );
+                           return v->get_array().back();
+                        }
+                     }
+                     throw pointer_index_out_of_range( begin, end, i, v->get_array().size(), *v );
+                  }
+                  v = &v->at( i );
+                  break;
                }
-               else {
-                  parent.emplace_back( null );
-                  return parent.get_array().back();
+               case type::OBJECT: {
+                  const bool is_last = ( std::next( it ) == end );
+                  if( is_last ) {
+                     if constexpr( std::is_const_v< T > ) {
+                        return v->at( it->key() );
+                     }
+                     else {
+                        return v->get_object()[ it->key() ];
+                     }
+                  }
+                  v = &v->at( it->key() );
+                  if( it->key().empty() ) {
+                     return *v;
+                  }
+                  break;
                }
+               default:
+                  throw invalid_type( begin, std::next( it ) );
             }
-            return parent.at( e->index() );
+            ++it;
          }
-         throw invalid_type( begin, std::next( e ) );
+         return *v;
       }
 
       template< typename T >
@@ -466,19 +501,33 @@ namespace tao::json
          if( begin == end ) {
             throw invalid_root_pointer_for_erase( *v );
          }
-         const auto e = std::prev( end );
-         T& parent = pointer_at( v, begin, e );
-         if( parent.is_object() ) {
-            parent.erase( e->key() );
-         }
-         else if( parent.is_array() ) {
-            if( e->key().empty() ) {
-               throw invalid_type( begin, std::next( e ) );
+         auto it = begin;
+         while( it != end ) {
+            const bool is_last = ( std::next( it ) == end );
+            switch( v->type() ) {
+               case type::ARRAY: {
+                  if( it->key().empty() ) {
+                     throw invalid_type( begin, std::next( it ) );
+                  }
+                  if( is_last ) {
+                     v->erase( it->index() );
+                     return;
+                  }
+                  v = &v->at( it->index() );
+                  break;
+               }
+               case type::OBJECT: {
+                  if( is_last || it->key().empty() ) {
+                     v->erase( it->key() );
+                     return;
+                  }
+                  v = &v->at( it->key() );
+                  break;
+               }
+               default:
+                  throw invalid_type( begin, std::next( it ) );
             }
-            parent.erase( e->index() );
-         }
-         else {
-            throw invalid_type( begin, std::next( e ) );
+            ++it;
          }
       }
 
@@ -489,32 +538,50 @@ namespace tao::json
             *v = std::move( in );
             return *v;
          }
-         const auto e = std::prev( end );
-         T& parent = pointer_at( v, begin, e );
-         if( parent.is_object() ) {
-            return parent.get_object().insert_or_assign( e->key(), std::move( in ) ).first->second;
+         auto it = begin;
+         while( it != end ) {
+            const bool is_last = ( std::next( it ) == end );
+            switch( v->type() ) {
+               case type::ARRAY: {
+                  auto& a = v->get_array();
+                  if( it->key().empty() ) {
+                     throw invalid_type( begin, std::next( it ) );
+                  }
+                  if( it->key() == "-" ) {
+                     if( !is_last ) {
+                        throw invalid_type( begin, std::next( it ) );
+                     }
+                     v->emplace_back( std::move( in ) );
+                     return a.back();
+                  }
+                  const auto i = it->index();
+                  if( is_last ) {
+                     if( i > a.size() ) {
+                        throw pointer_index_out_of_range( begin, end, i, a.size(), *v );
+                     }
+                     if( i == a.size() ) {
+                        v->emplace_back( std::move( in ) );
+                        return a.back();
+                     }
+                     a[ i ] = std::move( in );
+                     return a[ i ];
+                  }
+                  v = &v->at( i );
+                  break;
+               }
+               case type::OBJECT: {
+                  if( is_last || it->key().empty() ) {
+                     return v->get_object().insert_or_assign( it->key(), std::move( in ) ).first->second;
+                  }
+                  v = &v->at( it->key() );
+                  break;
+               }
+               default:
+                  throw invalid_type( begin, std::next( it ) );
+            }
+            ++it;
          }
-         if( parent.is_array() ) {
-            auto& a = parent.get_array();
-            if( e->key().empty() ) {
-               throw invalid_type( begin, std::next( e ) );
-            }
-            if( e->key() == "-" ) {
-               parent.emplace_back( std::move( in ) );
-               return a.back();
-            }
-            const auto i = e->index();
-            if( i > a.size() ) {
-               throw pointer_index_out_of_range( begin, std::next( e ), i, a.size(), *v );
-            }
-            if( i == a.size() ) {
-               parent.emplace_back( std::move( in ) );
-               return a.back();
-            }
-            a[ i ] = std::move( in );
-            return a[ i ];
-         }
-         throw invalid_type( begin, std::next( e ) );
+         return *v;
       }
 
    }  // namespace internal
